@@ -185,6 +185,10 @@ export function previewUrlFormatter(
   }
 
   let fields = entry.get('data') as Map<string, string>;
+  if (!fields) {
+    return baseUrl;
+  }
+  
   fields = addFileTemplateFields(entry.get('path'), fields, collection.get('folder'));
   const dateFieldName = getDateField() || selectInferredField(collection, 'date');
   const date = parseDateFromEntry(entry as unknown as Map<string, unknown>, dateFieldName);
@@ -216,6 +220,10 @@ export function previewUrlFormatter(
 
 export function summaryFormatter(summaryTemplate: string, entry: EntryMap, collection: Collection) {
   let entryData = entry.get('data');
+  if (!entryData) {
+    return summaryTemplate;
+  }
+  
   const date =
     parseDateFromEntry(
       entry as unknown as Map<string, unknown>,

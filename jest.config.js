@@ -19,4 +19,8 @@ module.exports = {
   testEnvironmentOptions: {
     url: 'http://localhost:8080',
   },
+  // cre: https://jestjs.io/docs/configuration#testmatch-arraystring
+  testMatch: [
+    "**/?(*.)+(spec|test).?([mc])[jt]s?(x)"
+  ],
 };

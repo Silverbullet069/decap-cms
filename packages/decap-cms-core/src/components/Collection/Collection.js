@@ -12,7 +12,8 @@ import CollectionTop from './CollectionTop';
 import EntriesCollection from './Entries/EntriesCollection';
 import EntriesSearch from './Entries/EntriesSearch';
 import CollectionControls from './CollectionControls';
-import { sortByField, filterByField, changeViewStyle, groupByField } from '../../actions/entries';
+import Spinner from './Spinner';
+import { sortByField, filterByField, changeViewStyle, groupByField, changePaginationPage } from '../../actions/entries';
 import {
   selectSortableFields,
   selectViewFilters,
@@ -23,6 +24,11 @@ import {
   selectEntriesFilter,
   selectEntriesGroup,
   selectViewStyle,
+  selectPaginationInfoWithFiltering,
+  selectPaginationEnabled,
+  selectPaginationIsLoadingMore,
+  selectAllEntriesLoaded,
+  selectIsFetching,
 } from '../../reducers/entries';
 
 const CollectionContainer = styled.div`
@@ -53,6 +59,11 @@ export class Collection extends React.Component {
     sortableFields: PropTypes.array,
     sort: ImmutablePropTypes.orderedMap,
     onSortClick: PropTypes.func.isRequired,
+    paginationInfo: PropTypes.object,
+    paginationEnabled: PropTypes.bool,
+    onPaginationChange: PropTypes.func.isRequired,
+    allEntriesLoaded: PropTypes.bool,
+    isFetching: PropTypes.bool,
   };
 
   componentDidMount() {
@@ -61,7 +72,18 @@ export class Collection extends React.Component {
   }
 
   renderEntriesCollection = () => {
-    const { collection, filterTerm, viewStyle } = this.props;
+    const { collection, filterTerm, viewStyle, allEntriesLoaded, isFetching } = this.props;
+
+    // Show loading state if we're fetching and haven't loaded all entries yet
+    if (isFetching && !allEntriesLoaded) {
+      return (
+        <Spinner
+          collection={collection.get('name')}
+          message="Loading all entries for accurate sorting and filtering..."
+        />
+      );
+    }
+
     return (
       <EntriesCollection collection={collection} viewStyle={viewStyle} filterTerm={filterTerm} />
     );
@@ -99,6 +121,10 @@ export class Collection extends React.Component {
       group,
       onChangeViewStyle,
       viewStyle,
+      paginationInfo,
+      paginationEnabled,
+      onPaginationChange,
+      isLoadingMore,
     } = this.props;
 
     let newEntryUrl = collection.get('create') ? getNewEntryUrl(collectionName) : '';
@@ -144,6 +170,10 @@ export class Collection extends React.Component {
                 onGroupClick={onGroupClick}
                 filter={filter}
                 group={group}
+                paginationInfo={paginationInfo}
+                paginationEnabled={paginationEnabled}
+                onPaginationChange={onPaginationChange}
+                isLoadingMore={isLoadingMore}
               />
             </>
           )}
@@ -167,6 +197,11 @@ function mapStateToProps(state, ownProps) {
   const filter = selectEntriesFilter(state.entries, collection.get('name'));
   const group = selectEntriesGroup(state.entries, collection.get('name'));
   const viewStyle = selectViewStyle(state.entries);
+  const paginationInfo = selectPaginationInfoWithFiltering(state.entries, collection);
+  const paginationEnabled = selectPaginationEnabled(state.entries, collection.get('name'));
+  const isLoadingMore = selectPaginationIsLoadingMore(state.entries, collection.get('name'));
+  const allEntriesLoaded = selectAllEntriesLoaded(state.entries, collection.get('name'));
+  const isFetching = selectIsFetching(state.entries, collection.get('name'));
 
   return {
     collection,
@@ -183,6 +218,11 @@ function mapStateToProps(state, ownProps) {
     filter,
     group,
     viewStyle,
+    paginationInfo,
+    paginationEnabled,
+    isLoadingMore,
+    allEntriesLoaded,
+    isFetching,
   };
 }
 
@@ -191,6 +231,7 @@ const mapDispatchToProps = {
   filterByField,
   changeViewStyle,
   groupByField,
+  changePaginationPage,
 };
 
 function mergeProps(stateProps, dispatchProps, ownProps) {
@@ -202,6 +243,7 @@ function mergeProps(stateProps, dispatchProps, ownProps) {
     onFilterClick: filter => dispatchProps.filterByField(stateProps.collection, filter),
     onGroupClick: group => dispatchProps.groupByField(stateProps.collection, group),
     onChangeViewStyle: viewStyle => dispatchProps.changeViewStyle(viewStyle),
+    onPaginationChange: page => dispatchProps.changePaginationPage(stateProps.collection, page),
   };
 }
 

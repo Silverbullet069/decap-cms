@@ -48,6 +48,18 @@ describe('entries', () => {
                 ids: ['a', 'b'],
               },
             },
+            pagination: {
+              posts: {
+                currentPage: 1,
+                pageSize: 8,
+                totalEntries: 2,
+                enabled: true,
+                loadedCount: 2,
+                totalAvailable: 2,
+                isLoadingMore: false,
+                hasMore: false,
+              },
+            },
           }),
         ),
       );

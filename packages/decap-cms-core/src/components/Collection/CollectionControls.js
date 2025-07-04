@@ -6,6 +6,7 @@ import ViewStyleControl from './ViewStyleControl';
 import SortControl from './SortControl';
 import FilterControl from './FilterControl';
 import GroupControl from './GroupControl';
+import PaginationControl from './PaginationControl';
 
 const CollectionControlsContainer = styled.div`
   display: flex;
@@ -33,9 +34,21 @@ function CollectionControls({
   t,
   filter,
   group,
+  paginationInfo,
+  onPaginationChange,
+  paginationEnabled,
+  isLoadingMore,
 }) {
   return (
     <CollectionControlsContainer>
+      {paginationEnabled && (
+        <PaginationControl
+          {...paginationInfo}
+          onPageChange={onPaginationChange}
+          isLoadingMore={isLoadingMore}
+          t={t}
+        />
+      )}
       <ViewStyleControl viewStyle={viewStyle} onChangeViewStyle={onChangeViewStyle} />
       {viewGroups.length > 0 && (
         <GroupControl viewGroups={viewGroups} onGroupClick={onGroupClick} t={t} group={group} />

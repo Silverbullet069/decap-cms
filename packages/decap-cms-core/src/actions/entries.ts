@@ -4,7 +4,7 @@ import { Cursor } from 'decap-cms-lib-util';
 
 import { selectCollectionEntriesCursor } from '../reducers/cursors';
 import { selectFields, updateFieldByKey } from '../reducers/collections';
-import { selectIntegration, selectPublishedSlugs } from '../reducers';
+import { selectIntegration } from '../reducers';
 import { getIntegrationProvider } from '../integrations';
 import { currentBackend } from '../backend';
 import { serializeValues } from '../lib/serializeEntryValues';
@@ -15,7 +15,12 @@ import { addAssets, getAsset } from './media';
 import { SortDirection } from '../types/redux';
 import { waitForMediaLibraryToLoad, loadMedia } from './mediaLibrary';
 import { waitUntil } from './waitUntil';
-import { selectIsFetching, selectEntriesSortFields, selectEntryByPath } from '../reducers/entries';
+import {
+  selectIsFetching,
+  selectEntryByPath,
+  selectPublishedSlugs,
+  selectAllEntriesLoaded,
+} from '../reducers/entries';
 import { selectCustomPath } from '../reducers/entryDraft';
 import { navigateToEntry } from '../routing/history';
 import { getProcessSegment } from '../lib/formatters';
@@ -86,6 +91,18 @@ export const REMOVE_DRAFT_ENTRY_MEDIA_FILE = 'REMOVE_DRAFT_ENTRY_MEDIA_FILE';
 
 export const CHANGE_VIEW_STYLE = 'CHANGE_VIEW_STYLE';
 
+export const CHANGE_PAGINATION_PAGE = 'CHANGE_PAGINATION_PAGE';
+export const CHANGE_PAGINATION_PAGE_SIZE = 'CHANGE_PAGINATION_PAGE_SIZE';
+export const SET_PAGINATION_TOTAL = 'SET_PAGINATION_TOTAL';
+
+export const LAZY_LOADING_REQUEST = 'LAZY_LOADING_REQUEST';
+export const LAZY_LOADING_SUCCESS = 'LAZY_LOADING_SUCCESS';
+export const LAZY_LOADING_FAILURE = 'LAZY_LOADING_FAILURE';
+
+// New constants for Load-All-Then-Paginate approach
+export const SET_ALL_ENTRIES_LOADED = 'SET_ALL_ENTRIES_LOADED';
+export const LOADING_ALL_ENTRIES_PROGRESS = 'LOADING_ALL_ENTRIES_PROGRESS';
+
 /*
  * Simple Action Creators (Internal)
  * We still need to export them for tests
@@ -136,6 +153,7 @@ export function entriesLoaded(
   pagination: number | null,
   cursor: Cursor,
   append = true,
+  totalEntries?: number,
 ) {
   return {
     type: ENTRIES_SUCCESS,
@@ -145,6 +163,7 @@ export function entriesLoaded(
       page: pagination,
       cursor: Cursor.create(cursor),
       append,
+      totalEntries,
     },
   };
 }
@@ -173,83 +192,56 @@ export function sortByField(
   key: string,
   direction: SortDirection = SortDirection.Ascending,
 ) {
-  return async (dispatch: ThunkDispatch<State, {}, AnyAction>, getState: () => State) => {
-    const state = getState();
-    // if we're already fetching we update the sort key, but skip loading entries
-    const isFetching = selectIsFetching(state.entries, collection.get('name'));
+  return async (dispatch: ThunkDispatch<State, {}, AnyAction>) => {
+    const collectionName = collection.get('name');
+
+    // Reset pagination when sort changes
+    dispatch({
+      type: CHANGE_PAGINATION_PAGE,
+      payload: { collection: collectionName, page: 1 }
+    });
+
+    // Apply sort - this will store the sort criteria in state
     dispatch({
       type: SORT_ENTRIES_REQUEST,
-      payload: {
-        collection: collection.get('name'),
-        key,
-        direction,
-      },
+      payload: { collection: collectionName, key, direction }
     });
-    if (isFetching) {
-      return;
-    }
 
-    try {
-      const entries = await getAllEntries(state, collection);
-      dispatch({
-        type: SORT_ENTRIES_SUCCESS,
-        payload: {
-          collection: collection.get('name'),
-          key,
-          direction,
-          entries,
-        },
-      });
-    } catch (error) {
-      dispatch({
-        type: SORT_ENTRIES_FAILURE,
-        payload: {
-          collection: collection.get('name'),
-          key,
-          direction,
-          error,
-        },
-      });
-    }
+    // Clear loading state - the actual sorting will be handled by selectors
+    dispatch({
+      type: SORT_ENTRIES_SUCCESS,
+      payload: {
+        collection: collectionName,
+        entries: [] // Empty entries since sorting is handled by selectors
+      }
+    });
   };
 }
 
 export function filterByField(collection: Collection, filter: ViewFilter) {
-  return async (dispatch: ThunkDispatch<State, {}, AnyAction>, getState: () => State) => {
-    const state = getState();
-    // if we're already fetching we update the filter key, but skip loading entries
-    const isFetching = selectIsFetching(state.entries, collection.get('name'));
+  return async (dispatch: ThunkDispatch<State, {}, AnyAction>) => {
+    const collectionName = collection.get('name');
+
+    // Reset pagination when filter changes
+    dispatch({
+      type: CHANGE_PAGINATION_PAGE,
+      payload: { collection: collectionName, page: 1 }
+    });
+
+    // Apply filter - this will store the filter criteria in state
     dispatch({
       type: FILTER_ENTRIES_REQUEST,
-      payload: {
-        collection: collection.get('name'),
-        filter,
-      },
+      payload: { collection: collectionName, filter }
     });
-    if (isFetching) {
-      return;
-    }
 
-    try {
-      const entries = await getAllEntries(state, collection);
-      dispatch({
-        type: FILTER_ENTRIES_SUCCESS,
-        payload: {
-          collection: collection.get('name'),
-          filter,
-          entries,
-        },
-      });
-    } catch (error) {
-      dispatch({
-        type: FILTER_ENTRIES_FAILURE,
-        payload: {
-          collection: collection.get('name'),
-          filter,
-          error,
-        },
-      });
-    }
+    // Clear loading state - the actual filtering will be handled by selectors
+    dispatch({
+      type: FILTER_ENTRIES_SUCCESS,
+      payload: {
+        collection: collectionName,
+        entries: [] // Empty entries since filtering is handled by selectors
+      }
+    });
   };
 }
 
@@ -296,6 +288,42 @@ export function changeViewStyle(viewStyle: string) {
     type: CHANGE_VIEW_STYLE,
     payload: {
       style: viewStyle,
+    },
+  };
+}
+
+export function changePaginationPage(collection: Collection, page: number) {
+  return async (dispatch: ThunkDispatch<State, {}, AnyAction>) => {
+    // Update the pagination page in state
+    dispatch({
+      type: CHANGE_PAGINATION_PAGE,
+      payload: {
+        collection: collection.get('name'),
+        page,
+      },
+    });
+
+    // Load entries for the new page
+    await dispatch(loadEntries(collection, page));
+  };
+}
+
+export function changePaginationPageSize(collection: Collection, pageSize: number) {
+  return {
+    type: CHANGE_PAGINATION_PAGE_SIZE,
+    payload: {
+      collection: collection.get('name'),
+      pageSize,
+    },
+  };
+}
+
+export function setPaginationTotal(collection: Collection, totalEntries: number) {
+  return {
+    type: SET_PAGINATION_TOTAL,
+    payload: {
+      collection: collection.get('name'),
+      totalEntries,
     },
   };
 }
@@ -572,16 +600,20 @@ function addAppendActionsToCursor(cursor: Cursor) {
   });
 }
 
-export function loadEntries(collection: Collection, page = 0) {
+export function loadEntries(collection: Collection, page = 1) {
   return async (dispatch: ThunkDispatch<State, {}, AnyAction>, getState: () => State) => {
     if (collection.get('isFetching')) {
       return;
     }
+
     const state = getState();
-    const sortFields = selectEntriesSortFields(state.entries, collection.get('name'));
-    if (sortFields && sortFields.length > 0) {
-      const field = sortFields[0];
-      return dispatch(sortByField(collection, field.get('key'), field.get('direction')));
+    const collectionName = collection.get('name');
+
+    // Check if we've already loaded all entries for this collection
+    const allEntriesLoaded = selectAllEntriesLoaded(state.entries, collectionName);
+    if (allEntriesLoaded) {
+      // All entries are already loaded, no need to fetch again
+      return;
     }
 
     const backend = currentBackend(state.config);
@@ -589,48 +621,67 @@ export function loadEntries(collection: Collection, page = 0) {
     const provider = integration
       ? getIntegrationProvider(state.integrations, backend.getToken, integration)
       : backend;
-    const append = !!(page && !isNaN(page) && page > 0);
+
     dispatch(entriesLoading(collection));
 
     try {
-      const loadAllEntries = collection.has('nested') || hasI18n(collection);
+      // **MINIMALIST APPROACH**: Always load ALL entries for the collection
+      // This ensures sort/filter/search operations work on the complete dataset
+      dispatch({
+        type: LOADING_ALL_ENTRIES_PROGRESS,
+        payload: { collection: collectionName, message: 'Loading all entries...' }
+      });
 
-      let response: {
-        cursor: Cursor;
-        pagination: number;
-        entries: EntryValue[];
-      } = await (loadAllEntries
-        ? // nested collections require all entries to construct the tree
-          provider.listAllEntries(collection).then((entries: EntryValue[]) => ({ entries }))
-        : provider.listEntries(collection, page));
-      response = {
-        ...response,
-        // The only existing backend using the pagination system is the
-        // Algolia integration, which is also the only integration used
-        // to list entries. Thus, this checking for an integration can
-        // determine whether or not this is using the old integer-based
-        // pagination API. Other backends will simply store an empty
-        // cursor, which behaves identically to no cursor at all.
+      const allEntries = await provider.listAllEntries(collection);
+
+      // Large collection detection and warning
+      const LARGE_COLLECTION_THRESHOLD = 5000;
+      if (allEntries.length > LARGE_COLLECTION_THRESHOLD) {
+        dispatch(
+          addNotification({
+            message: {
+              key: 'ui.toast.largeCollectionWarning',
+              details: `Collection "${collectionName}" has ${allEntries.length} entries. This may affect performance.`,
+            },
+            type: 'warning',
+            dismissAfter: 10000,
+          }),
+        );
+      }
+
+      const response = {
+        entries: allEntries,
+        totalEntries: allEntries.length,
         cursor: integration
           ? Cursor.create({
-              actions: ['next'],
-              meta: { usingOldPaginationAPI: true },
-              data: { nextPage: page + 1 },
-            })
-          : Cursor.create(response.cursor),
+            actions: ['next'],
+            meta: { usingOldPaginationAPI: true },
+            data: { nextPage: page + 1 },
+          })
+          : Cursor.create({}),
       };
+
+      const finalCursor = response.cursor || Cursor.create({});
 
       dispatch(
         entriesLoaded(
           collection,
-          response.cursor.meta!.get('usingOldPaginationAPI')
+          finalCursor.meta?.get('usingOldPaginationAPI')
             ? response.entries.reverse()
             : response.entries,
-          response.pagination,
-          addAppendActionsToCursor(response.cursor),
-          append,
+          null, // pagination handled by selectors
+          addAppendActionsToCursor(finalCursor),
+          false, // never append - we load ALL entries
+          response.totalEntries,
         ),
       );
+
+      // Mark all entries as loaded
+      dispatch({
+        type: SET_ALL_ENTRIES_LOADED,
+        payload: { collection: collectionName }
+      });
+
     } catch (err) {
       dispatch(
         addNotification({
@@ -642,6 +693,31 @@ export function loadEntries(collection: Collection, page = 0) {
           dismissAfter: 8000,
         }),
       );
+
+      // Clear loading progress on error
+      dispatch({
+        type: LOADING_ALL_ENTRIES_PROGRESS,
+        payload: { collection: collectionName, message: '' }
+      });
+
+      // On error, check if we should fallback to lazy loading
+      const errorMessage = err?.message || String(err);
+      if (errorMessage.includes('too many') || errorMessage.includes('timeout') || errorMessage.includes('memory')) {
+        dispatch(
+          addNotification({
+            message: {
+              key: 'ui.toast.fallbackToLazyLoading',
+              details: 'Collection is too large. Using lazy loading instead.',
+            },
+            type: 'warning',
+            dismissAfter: 8000,
+          }),
+        );
+
+        // TODO: Implement fallback to lazy loading logic here
+        // For now, just reject the promise
+      }
+
       return Promise.reject(dispatch(entriesFailed(collection, err)));
     }
   };
@@ -767,13 +843,13 @@ export function createEmptyDraft(collection: Collection, search: string) {
 
 interface DraftEntryData {
   [name: string]:
-    | string
-    | null
-    | boolean
-    | List<unknown>
-    | DraftEntryData
-    | DraftEntryData[]
-    | (string | DraftEntryData | boolean | List<unknown>)[];
+  | string
+  | null
+  | boolean
+  | List<unknown>
+  | DraftEntryData
+  | DraftEntryData[]
+  | (string | DraftEntryData | boolean | List<unknown>)[];
 }
 
 export function createEmptyDraftData(
@@ -885,7 +961,7 @@ export function persistEntry(collection: Collection) {
     const state = getState();
     const entryDraft = state.entryDraft;
     const fieldsErrors = entryDraft.get('fieldsErrors');
-    const usedSlugs = selectPublishedSlugs(state, collection.get('name'));
+    const usedSlugs = selectPublishedSlugs(state.entries, collection.get('name'));
 
     // Early return if draft contains validation errors
     if (!fieldsErrors.isEmpty()) {

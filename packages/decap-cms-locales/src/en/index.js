@@ -61,6 +61,13 @@ const en = {
       other: 'Other',
       negateLabel: 'Not %{label}',
     },
+    pagination: {
+      previousPage: 'Previous Page',
+      nextPage: 'Next Page',
+      pageInfo: '%{start}-%{end} of %{total}',
+      noEntries: '0-0 of 0',
+      loading: 'Loading...',
+    },
     defaultFields: {
       author: {
         label: 'Author',

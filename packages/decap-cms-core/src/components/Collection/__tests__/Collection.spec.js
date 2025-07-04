@@ -35,6 +35,11 @@ describe('Collection', () => {
     collectionName: collection.get('name'),
     t: jest.fn(key => key),
     onSortClick: jest.fn(),
+    onPaginationChange: jest.fn(),
+    paginationEnabled: false,
+    paginationInfo: null,
+    allEntriesLoaded: false,
+    isFetching: false,
   };
 
   it('should render with collection without create url', () => {

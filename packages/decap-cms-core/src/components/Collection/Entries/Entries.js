@@ -22,10 +22,7 @@ function Entries({
   entries,
   isFetching,
   viewStyle,
-  cursor,
-  handleCursorActions,
   t,
-  page,
 }) {
   const loadingMessages = [
     t('collection.entries.loadingEntries'),
@@ -33,26 +30,18 @@ function Entries({
     t('collection.entries.longerLoading'),
   ];
 
-  if (isFetching && page === undefined) {
+  if (isFetching) {
     return <Loader active>{loadingMessages}</Loader>;
   }
 
-  const hasEntries = (entries && entries.size > 0) || cursor?.actions?.has('append_next');
+  const hasEntries = entries && entries.size > 0;
   if (hasEntries) {
     return (
-      <>
-        <EntryListing
-          collections={collections}
-          entries={entries}
-          viewStyle={viewStyle}
-          cursor={cursor}
-          handleCursorActions={handleCursorActions}
-          page={page}
-        />
-        {isFetching && page !== undefined && entries.size > 0 ? (
-          <PaginationMessage>{t('collection.entries.loadingEntries')}</PaginationMessage>
-        ) : null}
-      </>
+      <EntryListing
+        collections={collections}
+        entries={entries}
+        viewStyle={viewStyle}
+      />
     );
   }
 
@@ -62,11 +51,8 @@ function Entries({
 Entries.propTypes = {
   collections: ImmutablePropTypes.iterable.isRequired,
   entries: ImmutablePropTypes.list,
-  page: PropTypes.number,
   isFetching: PropTypes.bool,
   viewStyle: PropTypes.string,
-  cursor: PropTypes.any.isRequired,
-  handleCursorActions: PropTypes.func.isRequired,
   t: PropTypes.func.isRequired,
 };
 

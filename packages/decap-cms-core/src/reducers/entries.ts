@@ -31,6 +31,14 @@ import {
   GROUP_ENTRIES_SUCCESS,
   GROUP_ENTRIES_FAILURE,
   CHANGE_VIEW_STYLE,
+  CHANGE_PAGINATION_PAGE,
+  CHANGE_PAGINATION_PAGE_SIZE,
+  SET_PAGINATION_TOTAL,
+  LAZY_LOADING_REQUEST,
+  LAZY_LOADING_SUCCESS,
+  LAZY_LOADING_FAILURE,
+  SET_ALL_ENTRIES_LOADED,
+  LOADING_ALL_ENTRIES_PROGRESS,
 } from '../actions/entries';
 import { VIEW_STYLE_LIST } from '../constants/collectionViews';
 import { joinUrlPath } from '../lib/urlHelper';
@@ -63,9 +71,15 @@ import type {
   EntriesFilterRequestPayload,
   EntriesFilterFailurePayload,
   ChangeViewStylePayload,
+  PaginationChangePagePayload,
+  PaginationChangePageSizePayload,
+  PaginationSetTotalPayload,
   EntriesGroupRequestPayload,
   EntriesGroupFailurePayload,
   GroupOfEntries,
+  LazyLoadingRequestPayload,
+  LazyLoadingSuccessPayload,
+  LazyLoadingFailurePayload,
 } from '../types/redux';
 
 const { keyToPathArray } = stringTemplate;
@@ -149,7 +163,16 @@ function persistViewStyle(viewStyle: string | undefined) {
 }
 
 function entries(
-  state = Map({ entities: Map(), pages: Map(), sort: loadSort(), viewStyle: loadViewStyle() }),
+  state = Map({
+    entities: Map(),
+    pages: Map(),
+    sort: loadSort(),
+    filter: Map(),
+    group: Map(),
+    pagination: Map(),
+    viewStyle: loadViewStyle(),
+    collections: Map(),
+  }),
   action: EntriesAction,
 ) {
   switch (action.type) {
@@ -165,8 +188,15 @@ function entries(
       return state.withMutations(map => {
         map.setIn(['entities', `${collection}.${slug}`], fromJS(payload.entry));
         const ids = map.getIn(['pages', collection, 'ids'], List());
-        if (!ids.includes(slug)) {
+        const isNewEntry = !ids.includes(slug);
+        if (isNewEntry) {
           map.setIn(['pages', collection, 'ids'], ids.unshift(slug));
+
+          // Update pagination total entries count for new entries
+          if (map.hasIn(['pagination', collection])) {
+            const currentTotal = map.getIn(['pagination', collection, 'totalEntries']) || 0;
+            map.setIn(['pagination', collection, 'totalEntries'], currentTotal + 1);
+          }
         }
       });
     }
@@ -195,13 +225,62 @@ function entries(
         );
 
         const ids = List(loadedEntries.map(entry => entry.slug));
+        const isPaginated = map.hasIn(['pagination', collection]);
+
+        // For pagination with lazy loading, we need to accumulate all loaded entries
+        // instead of replacing them, so that frontend pagination can work correctly
+        let finalIds;
+        if (isPaginated && append) {
+          // When pagination is enabled and we're appending, accumulate the entries
+          const existingIds = map.getIn(['pages', collection, 'ids'], List());
+
+          // Deduplicate entries to prevent duplicate entries from appearing
+          const uniqueNewIds = ids.filter(id => !existingIds.includes(id));
+          finalIds = existingIds.concat(uniqueNewIds);
+        } else {
+          // For initial load or non-paginated collections, replace the entries
+          finalIds = ids;
+        }
+
         map.setIn(
           ['pages', collection],
           Map({
             page,
-            ids: append ? map.getIn(['pages', collection, 'ids'], List()).concat(ids) : ids,
+            ids: finalIds,
           }),
         );
+
+        // Initialize pagination state if not exists
+        if (!map.hasIn(['pagination', collection])) {
+          // Use total entries from backend response if available
+          const totalCount = payload.totalEntries ?? loadedEntries.length;
+
+          map.setIn(['pagination', collection], Map({
+            currentPage: 1,
+            pageSize: 8, // Fixed page size for frontend pagination
+            totalEntries: totalCount,
+            enabled: true,
+            loadedCount: loadedEntries.length,
+            totalAvailable: totalCount,
+            isLoadingMore: false,
+            hasMore: loadedEntries.length < totalCount,
+          }));
+        } else {
+          // Update pagination state with new loading information
+          const currentLoaded = map.getIn(['pagination', collection, 'loadedCount'], 0);
+          const newLoadedCount = append ? currentLoaded + loadedEntries.length : loadedEntries.length;
+          const existingTotalAvailable = map.getIn(['pagination', collection, 'totalAvailable'], 0);
+          const totalCount = payload.totalEntries ?? existingTotalAvailable;
+
+          // Only update totalEntries and totalAvailable if we have a valid total from the backend
+          if (payload.totalEntries !== undefined) {
+            map.setIn(['pagination', collection, 'totalEntries'], totalCount);
+            map.setIn(['pagination', collection, 'totalAvailable'], totalCount);
+          }
+          map.setIn(['pagination', collection, 'loadedCount'], newLoadedCount);
+          map.setIn(['pagination', collection, 'hasMore'], newLoadedCount < totalCount);
+          map.setIn(['pagination', collection, 'isLoadingMore'], false);
+        }
       });
     }
     case ENTRIES_FAILURE:
@@ -238,6 +317,12 @@ function entries(
         map.updateIn(['pages', payload.collectionName, 'ids'], (ids: string[]) =>
           ids.filter(id => id !== payload.entrySlug),
         );
+
+        // Update pagination total entries count
+        if (map.hasIn(['pagination', payload.collectionName])) {
+          const currentTotal = map.getIn(['pagination', payload.collectionName, 'totalEntries']) || 0;
+          map.setIn(['pagination', payload.collectionName, 'totalEntries'], Math.max(0, currentTotal - 1));
+        }
       });
     }
 
@@ -261,21 +346,25 @@ function entries(
       const { collection, entries } = payload;
       loadedEntries = entries;
       const newState = state.withMutations(map => {
-        loadedEntries.forEach(entry =>
+        // Only update entries if they are provided (not empty array)
+        if (loadedEntries.length > 0) {
+          loadedEntries.forEach(entry =>
+            map.setIn(
+              ['entities', `${entry.collection}.${entry.slug}`],
+              fromJS(entry).set('isFetching', false),
+            ),
+          );
+          const ids = List(loadedEntries.map(entry => entry.slug));
           map.setIn(
-            ['entities', `${entry.collection}.${entry.slug}`],
-            fromJS(entry).set('isFetching', false),
-          ),
-        );
+            ['pages', collection],
+            Map({
+              page: 1,
+              ids,
+            }),
+          );
+        }
+        // Always clear loading state
         map.setIn(['pages', collection, 'isFetching'], false);
-        const ids = List(loadedEntries.map(entry => entry.slug));
-        map.setIn(
-          ['pages', collection],
-          Map({
-            page: 1,
-            ids,
-          }),
-        );
       });
       return newState;
     }
@@ -300,6 +389,8 @@ function entries(
           ['filter', collection, current.get('id')],
           current.set('active', !current.get('active')),
         );
+        // ADD: Set loading state for consistency
+        map.setIn(['pages', collection, 'isFetching'], true);
       });
       return newState;
     }
@@ -346,6 +437,67 @@ function entries(
       });
       persistViewStyle(newState.get('viewStyle') as string);
       return newState;
+    }
+
+    case LAZY_LOADING_REQUEST: {
+      const payload = action.payload as LazyLoadingRequestPayload;
+      const { collection } = payload;
+      return state.withMutations(map => {
+        map.setIn(['pagination', collection, 'isLoadingMore'], true);
+      });
+    }
+
+    case LAZY_LOADING_SUCCESS: {
+      const payload = action.payload as LazyLoadingSuccessPayload;
+      const { collection } = payload;
+      return state.withMutations(map => {
+        map.setIn(['pagination', collection, 'isLoadingMore'], false);
+      });
+    }
+
+    case LAZY_LOADING_FAILURE: {
+      const payload = action.payload as LazyLoadingFailurePayload;
+      const { collection } = payload;
+      return state.withMutations(map => {
+        map.setIn(['pagination', collection, 'isLoadingMore'], false);
+      });
+    }
+
+    case CHANGE_PAGINATION_PAGE: {
+      const payload = action.payload as unknown as PaginationChangePagePayload;
+      const { collection, page } = payload;
+      return state.setIn(['pagination', collection, 'currentPage'], page);
+    }
+
+    case CHANGE_PAGINATION_PAGE_SIZE: {
+      const payload = action.payload as unknown as PaginationChangePageSizePayload;
+      const { collection, pageSize } = payload;
+      return state.withMutations(map => {
+        map.setIn(['pagination', collection, 'pageSize'], pageSize);
+        map.setIn(['pagination', collection, 'currentPage'], 1); // Reset to first page
+      });
+    }
+
+    case SET_PAGINATION_TOTAL: {
+      const payload = action.payload as unknown as PaginationSetTotalPayload;
+      const { collection, totalEntries } = payload;
+      return state.setIn(['pagination', collection, 'totalEntries'], totalEntries);
+    }
+
+    case SET_ALL_ENTRIES_LOADED: {
+      const payload = action.payload as { collection: string };
+      return state.withMutations(map => {
+        map.setIn(['collections', payload.collection, 'allEntriesLoaded'], true);
+        // Clear loading progress when entries are loaded
+        map.deleteIn(['collections', payload.collection, 'loadingProgress']);
+      });
+    }
+
+    case LOADING_ALL_ENTRIES_PROGRESS: {
+      const payload = action.payload as { collection: string; message: string };
+      return payload.message
+        ? state.setIn(['collections', payload.collection, 'loadingProgress'], payload.message)
+        : state.deleteIn(['collections', payload.collection, 'loadingProgress']);
     }
 
     default:
@@ -418,6 +570,11 @@ function getPublishedEntries(state: Entries, collectionName: string) {
 export function selectEntries(state: Entries, collection: Collection) {
   const collectionName = collection.get('name');
   let entries = getPublishedEntries(state, collectionName);
+
+  // Filter out null/undefined entries to prevent issues during sorting
+  if (entries) {
+    entries = entries.filter(entry => entry != null).toList();
+  }
 
   const sortFields = selectEntriesSortFields(state, collectionName);
   if (sortFields && sortFields.length > 0) {
@@ -530,6 +687,14 @@ export function selectEntriesLoaded(state: Entries, collection: string) {
 
 export function selectIsFetching(state: Entries, collection: string) {
   return state.getIn(['pages', collection, 'isFetching'], false);
+}
+
+export function selectAllEntriesLoaded(state: Entries, collection: string) {
+  const collections = state.get('collections');
+  if (collections && collections.has(collection)) {
+    return collections.getIn([collection, 'allEntriesLoaded'], false);
+  }
+  return false;
 }
 
 const DRAFT_MEDIA_FILES = 'DRAFT_MEDIA_FILES';
@@ -806,6 +971,173 @@ export function selectEditingDraft(state: EntryDraft) {
   const entry = state.get('entry');
   const workflowDraft = entry && !entry.isEmpty();
   return workflowDraft;
+}
+
+// Pagination selectors
+export function selectPaginationState(state: Entries, collection: string) {
+  // Add defensive check for state structure
+  if (!state || !state.get || !state.getIn) {
+    return fromJS({
+      currentPage: 1,
+      pageSize: 8,
+      totalEntries: 0,
+      enabled: true,
+      loadedCount: 0,
+      totalAvailable: 0,
+      isLoadingMore: false,
+      hasMore: false,
+    });
+  }
+
+  const paginationState = state.getIn(['pagination', collection]);
+  if (!paginationState) {
+    return fromJS({
+      currentPage: 1,
+      pageSize: 8,
+      totalEntries: 0,
+      enabled: true,
+      loadedCount: 0,
+      totalAvailable: 0,
+      isLoadingMore: false,
+      hasMore: false,
+    });
+  }
+  return paginationState;
+}
+
+export function selectPaginationPageSize(state: Entries, collection: string) {
+  const paginationState = selectPaginationState(state, collection);
+  return paginationState.get('pageSize') || 8;
+}
+
+export function selectPaginationCurrentPage(state: Entries, collection: string) {
+  const paginationState = selectPaginationState(state, collection);
+  return paginationState.get('currentPage') || 1;
+}
+
+export function selectPaginationTotalEntries(state: Entries, collection: string) {
+  const paginationState = selectPaginationState(state, collection);
+  return paginationState.get('totalEntries') || 0;
+}
+
+export function selectPaginationLoadedCount(state: Entries, collection: string) {
+  const paginationState = selectPaginationState(state, collection);
+  return paginationState.get('loadedCount') || 0;
+}
+
+export function selectPaginationTotalAvailable(state: Entries, collection: string) {
+  const paginationState = selectPaginationState(state, collection);
+  return paginationState.get('totalAvailable') || 0;
+}
+
+export function selectPaginationIsLoadingMore(state: Entries, collection: string) {
+  const paginationState = selectPaginationState(state, collection);
+  return paginationState.get('isLoadingMore') || false;
+}
+
+export function selectPaginationHasMore(state: Entries, collection: string) {
+  const paginationState = selectPaginationState(state, collection);
+  return paginationState.get('hasMore') || false;
+}
+
+export function selectPaginationEnabled(state: Entries, collection: string) {
+  const paginationState = selectPaginationState(state, collection);
+  return paginationState.get('enabled') !== false;
+}
+
+export function selectPaginatedEntries(state: Entries, collection: Collection) {
+  // Get entries after sorting and filtering (the complete processed dataset)
+  const processedEntries = selectEntries(state, collection);
+  const collectionName = collection.get('name');
+  const paginationEnabled = selectPaginationEnabled(state, collectionName);
+
+  // If pagination is disabled, return all processed entries
+  if (!paginationEnabled) {
+    return processedEntries;
+  }
+
+  // Apply frontend pagination to the filtered/sorted results
+  const pageSize = selectPaginationPageSize(state, collectionName);
+  const currentPage = selectPaginationCurrentPage(state, collectionName);
+
+  const startIndex = (currentPage - 1) * pageSize;
+  const endIndex = startIndex + pageSize;
+
+  return processedEntries.slice(startIndex, endIndex);
+}
+
+export function selectPaginationInfo(state: Entries, collection: string) {
+  const pageSize = selectPaginationPageSize(state, collection);
+  const currentPage = selectPaginationCurrentPage(state, collection);
+  const totalEntries = selectPaginationTotalEntries(state, collection);
+  const totalPages = Math.ceil(totalEntries / pageSize);
+
+  const startEntry = totalEntries === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+  const endEntry = Math.min(currentPage * pageSize, totalEntries);
+
+  return {
+    pageSize,
+    currentPage,
+    totalEntries,
+    totalPages,
+    startEntry,
+    endEntry,
+    hasNextPage: currentPage < totalPages,
+    hasPreviousPage: currentPage > 1,
+  };
+}
+
+export function selectPaginationInfoWithLoadingState(state: Entries, collection: string) {
+  const basicInfo = selectPaginationInfo(state, collection);
+  const loadedCount = selectPaginationLoadedCount(state, collection);
+  const hasMore = selectPaginationHasMore(state, collection);
+
+  return {
+    ...basicInfo,
+    loadedCount,
+    hasMore,
+  };
+}
+
+export function selectPaginationInfoWithFiltering(state: Entries, collection: Collection) {
+  const collectionName = collection.get('name');
+  const paginationEnabled = selectPaginationEnabled(state, collectionName);
+
+  if (!paginationEnabled) {
+    return selectPaginationInfo(state, collectionName);
+  }
+
+  // Get the basic pagination info first
+  const basicPaginationInfo = selectPaginationInfo(state, collectionName);
+
+  // Check if any filters are applied (sorting doesn't change total count)
+  const filterFields = selectEntriesFilterFields(state, collectionName);
+  const hasActiveFilters = (filterFields && filterFields.length > 0);
+
+  // If no filters are active, use the basic pagination info (which uses totalEntries from pagination state)
+  if (!hasActiveFilters) {
+    return basicPaginationInfo;
+  }
+
+  // If filters are active, count the filtered entries and adjust the pagination info
+  const filteredEntries = selectEntries(state, collection);
+  const filteredTotal = filteredEntries ? filteredEntries.size : 0;
+
+  const pageSize = basicPaginationInfo.pageSize;
+  const currentPage = basicPaginationInfo.currentPage;
+  const totalPages = Math.ceil(filteredTotal / pageSize);
+  const startEntry = filteredTotal === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+  const endEntry = Math.min(currentPage * pageSize, filteredTotal);
+
+  return {
+    ...basicPaginationInfo,
+    totalEntries: filteredTotal,
+    totalPages,
+    startEntry,
+    endEntry,
+    hasNextPage: currentPage < totalPages,
+    hasPreviousPage: currentPage > 1,
+  };
 }
 
 export default entries;

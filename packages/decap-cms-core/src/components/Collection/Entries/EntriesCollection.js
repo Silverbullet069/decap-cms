@@ -5,6 +5,7 @@ import { connect } from 'react-redux';
 import styled from '@emotion/styled';
 import { translate } from 'react-polyglot';
 import partial from 'lodash/partial';
+import { List } from 'immutable';
 import { Cursor } from 'decap-cms-lib-util';
 import { colors } from 'decap-cms-ui-default';
 
@@ -17,6 +18,10 @@ import {
   selectEntriesLoaded,
   selectIsFetching,
   selectGroups,
+  selectPaginatedEntries,
+  selectPaginationInfoWithLoadingState,
+  selectPaginationEnabled,
+  selectPaginationIsLoadingMore,
 } from '../../../reducers/entries';
 import { selectCollectionEntriesCursor } from '../../../reducers/cursors';
 import Entries from './Entries';
@@ -70,6 +75,8 @@ export class EntriesCollection extends React.Component {
     loadEntries: PropTypes.func.isRequired,
     traverseCollectionCursor: PropTypes.func.isRequired,
     entriesLoaded: PropTypes.bool,
+    paginationInfo: PropTypes.object,
+    paginationEnabled: PropTypes.bool,
   };
 
   componentDidMount() {
@@ -83,9 +90,27 @@ export class EntriesCollection extends React.Component {
   }
 
   componentDidUpdate(prevProps) {
-    const { collection, entriesLoaded, loadEntries } = this.props;
+    const { collection, entriesLoaded, loadEntries, paginationInfo } = this.props;
+
+    // Load entries if collection changed and not loaded
     if (collection !== prevProps.collection && !entriesLoaded) {
       loadEntries(collection);
+    }
+
+    // Check if we need to load more entries when pagination page changed
+    if (paginationInfo && prevProps.paginationInfo &&
+      paginationInfo.currentPage !== prevProps.paginationInfo.currentPage) {
+
+      // Only load more entries if we don't have enough entries for the current page
+      const currentPage = paginationInfo.currentPage;
+      const pageSize = paginationInfo.pageSize;
+      const requiredEntries = currentPage * pageSize;
+      const loadedCount = paginationInfo.loadedCount || 0;
+
+      // Load more entries if we need them for the current page
+      if (requiredEntries > loadedCount && paginationInfo.hasMore) {
+        loadEntries(collection, currentPage);
+      }
     }
   }
 
@@ -148,27 +173,84 @@ export function filterNestedEntries(path, collectionFolder, entries, subfolders)
 
 function mapStateToProps(state, ownProps) {
   const { collection, viewStyle, filterTerm } = ownProps;
-  const page = state.entries.getIn(['pages', collection.get('name'), 'page']);
 
-  let entries = selectEntries(state.entries, collection);
-  const groups = selectGroups(state.entries, collection);
-
-  if (collection.has('nested')) {
-    const collectionFolder = collection.get('folder');
-    entries = filterNestedEntries(
-      filterTerm || '',
-      collectionFolder,
-      entries,
-      collection.get('nested').get('subfolders') !== false,
-    );
+  // Add defensive checks for state structure
+  if (!state || !state.entries || !collection) {
+    return {
+      collection,
+      page: 1,
+      entries: List(),
+      groups: [],
+      entriesLoaded: false,
+      isFetching: false,
+      viewStyle,
+      cursor: Cursor.create({}),
+      paginationInfo: {
+        pageSize: 8,
+        currentPage: 1,
+        totalEntries: 0,
+        totalPages: 0,
+        startEntry: 0,
+        endEntry: 0,
+        hasNextPage: false,
+        hasPreviousPage: false,
+        loadedCount: 0,
+        hasMore: false,
+      },
+      paginationEnabled: true,
+      isLoadingMore: false,
+    };
   }
+
+  const page = state.entries.getIn(['pages', collection.get('name'), 'page']);
+  const paginationEnabled = selectPaginationEnabled(state.entries, collection.get('name'));
+  const paginationInfo = selectPaginationInfoWithLoadingState(state.entries, collection.get('name'));
+  const isLoadingMore = selectPaginationIsLoadingMore(state.entries, collection.get('name'));
+
+  let entries;
+
+  try {
+    if (paginationEnabled) {
+      // Use paginated entries when pagination is enabled
+      entries = selectPaginatedEntries(state.entries, collection);
+    } else {
+      // Fall back to all entries when pagination is disabled
+      entries = selectEntries(state.entries, collection);
+    }
+
+    if (collection.has('nested')) {
+      const collectionFolder = collection.get('folder');
+      entries = filterNestedEntries(
+        filterTerm || '',
+        collectionFolder,
+        entries,
+        collection.get('nested').get('subfolders') !== false,
+      );
+    }
+  } catch (error) {
+    console.error('Error in mapStateToProps:', error);
+    entries = List();
+  }
+
   const entriesLoaded = selectEntriesLoaded(state.entries, collection.get('name'));
   const isFetching = selectIsFetching(state.entries, collection.get('name'));
 
   const rawCursor = selectCollectionEntriesCursor(state.cursors, collection.get('name'));
   const cursor = Cursor.create(rawCursor).clearData();
 
-  return { collection, page, entries, groups, entriesLoaded, isFetching, viewStyle, cursor };
+  return {
+    collection,
+    page,
+    entries,
+    groups: selectGroups(state.entries, collection) || [],
+    entriesLoaded,
+    isFetching: isFetching || isLoadingMore,
+    viewStyle,
+    cursor,
+    paginationInfo,
+    paginationEnabled,
+    isLoadingMore,
+  };
 }
 
 const mapDispatchToProps = {

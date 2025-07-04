@@ -382,6 +382,10 @@ export function selectEntryCollectionTitle(collection: Collection, entry: EntryM
 
   // try to infer a title field from the entry data
   const entryData = entry.get('data');
+  if (!entryData) {
+    return null;
+  }
+  
   const titleField = selectInferredField(collection, 'title');
   const result = titleField && entryData.getIn(keyToPathArray(titleField));
 

@@ -500,6 +500,21 @@ export type Filter = Map<string, Map<string, FilterMap>>; // collection.field.ac
 
 export type Group = Map<string, Map<string, GroupMap>>; // collection.field.active
 
+export type PaginationObject = {
+  currentPage: number;
+  pageSize: number;
+  totalEntries: number;
+  enabled: boolean;
+  loadedCount: number;
+  totalAvailable: number;
+  isLoadingMore: boolean;
+  hasMore: boolean;
+};
+
+export type PaginationMap = StaticallyTypedRecord<PaginationObject>;
+
+export type Pagination = Map<string, PaginationMap>; // keyed by collection name
+
 export type GroupOfEntries = {
   id: string;
   label: string;
@@ -515,7 +530,9 @@ export type Entries = StaticallyTypedRecord<{
   sort: Sort;
   filter: Filter;
   group: Group;
+  pagination: Pagination;
   viewStyle: string;
+  collections: Map<string, Map<string, unknown>>;
 }>;
 
 export type EditorialWorkflow = StaticallyTypedRecord<{
@@ -741,6 +758,7 @@ export interface EntriesSuccessPayload extends EntryPayload {
   entries: EntryObject[];
   append: boolean;
   page: number;
+  totalEntries?: number;
 }
 export interface EntriesSortRequestPayload extends EntryPayload {
   key: string;
@@ -777,22 +795,43 @@ export interface ChangeViewStylePayload {
   style: string;
 }
 
-export interface EntriesMoveSuccessPayload extends EntryPayload {
-  entries: EntryObject[];
+export interface PaginationChangePagePayload extends EntryPayload {
+  page: number;
 }
 
-export interface EntriesAction extends Action<string> {
+export interface PaginationChangePageSizePayload extends EntryPayload {
+  pageSize: number;
+}
+
+export interface PaginationSetTotalPayload extends EntryPayload {
+  totalEntries: number;
+}
+
+export interface LazyLoadingRequestPayload {
+  collection: string;
+}
+
+export interface LazyLoadingSuccessPayload {
+  collection: string;
+}
+
+export interface LazyLoadingFailurePayload {
+  collection: string;
+  error: Error;
+}
+
+export type EntriesAction = Action<string> & {
   payload:
-    | EntryRequestPayload
-    | EntrySuccessPayload
-    | EntryFailurePayload
-    | EntriesSuccessPayload
-    | EntriesRequestPayload
-    | EntryDeletePayload;
+  | EntryRequestPayload
+  | EntrySuccessPayload
+  | EntryFailurePayload
+  | EntriesSuccessPayload
+  | EntriesRequestPayload
+  | EntryDeletePayload;
   meta: {
     collection: string;
   };
-}
+};
 
 export interface EditorialWorkflowAction extends Action<string> {
   payload?: CmsConfig & {
